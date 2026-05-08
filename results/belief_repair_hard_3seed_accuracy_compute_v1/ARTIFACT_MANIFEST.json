@@ -1,0 +1,27 @@
+{
+  "campaign_root": "results/belief_repair_hard_3seed_accuracy_compute_v1",
+  "release": "MBS-halting v0.3 (public release)",
+  "date_built": "2026-05-08",
+  "note": "Public release manifest. Only aggregate-level artifacts are checked in; per-seed checkpoints and per-seed train/eval JSONs are excluded by .gitignore.",
+  "entry_count": 2,
+  "checkpoint_count": 0,
+  "total_bytes_excluding_checkpoints": 21271,
+  "total_bytes_checkpoints": 0,
+  "hash_algo": "sha256",
+  "hash_policy": "sha256 computed for non-checkpoint files <= 200 MB; checkpoints not included in this public release",
+  "entries": [
+    {
+      "path": "results/belief_repair_hard_3seed_accuracy_compute_v1/aggregate_summary.json",
+      "size_bytes": 17194,
+      "size_human": "16.8 KB",
+      "sha256": "22d936eadb6ee4db920ca359e161dca29f263af082db11290944bf7915557fca"
+    },
+    {
+      "path": "results/belief_repair_hard_3seed_accuracy_compute_v1/aggregate_summary.md",
+      "size_bytes": 4077,
+      "size_human": "4.0 KB",
+      "sha256": "d4e343a38f8f5df4a00c590b1075ae657a7461b00ce3e485dbc655d88d27369b"
+    }
+  ],
+  "checkpoints": []
+}

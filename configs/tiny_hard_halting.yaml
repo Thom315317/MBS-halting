@@ -1,0 +1,31 @@
+seed: 1
+device: cuda_if_available
+task: belief_repair_hard
+hard_dataset: true
+train_size: 5000
+val_size: 512
+ood_size: 512
+batch_size: 16
+max_epochs: 5
+lr: 0.001
+weight_decay: 0.01
+d_state: 96
+num_cell_types: 8
+num_edge_types: 12
+num_operation_modes: 4
+max_cells_train: 96
+max_cells_ood: 192
+message_steps: 8
+dropout: 0.1
+lambda_answer: 1.0
+lambda_conflict: 0.2
+lambda_repair: 0.5
+lambda_stability: 0.01
+lambda_mode_entropy: 0.001
+grad_clip: 1.0
+halting:
+  enabled: true
+  max_message_steps: 16
+  min_message_steps: 4
+  lambda_ponder: 0.001
+  init_halt_prob: 0.05

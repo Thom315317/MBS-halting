@@ -1,0 +1,546 @@
+{
+  "name": "MBS-Halting v0.3",
+  "result_class": "3-seed accuracy/compute result on belief_repair_hard",
+  "date_archived": "2026-05-08",
+  "git": {
+    "repository": "MBS-halting (public release)",
+    "note": "Public release. Only aggregate-level artifacts are checked in; per-seed checkpoints and per-seed train/eval JSONs are excluded by .gitignore. See results/belief_repair_hard_3seed_accuracy_compute_v1/ARTIFACT_MANIFEST.json for the canonical file list with sha256."
+  },
+  "experimental_objective": "Test whether MBS-Halting retains a better accuracy/compute tradeoff than two strong RGCN baselines on belief_repair_hard: rgcn_repair_stability (fixed T=8) and rgcn_repair_stability_act_warmup_t8 (RGCN + ACT-lite + 3-epoch forced-T8 warmup, lambda_ponder=0.01).",
+  "common_config": {
+    "task": "belief_repair_hard",
+    "hard_dataset": true,
+    "train_size": 5000,
+    "val_size": 512,
+    "ood_size": 512,
+    "seeds": [
+      1,
+      2,
+      3
+    ],
+    "d_state": 96,
+    "batch_size": 16,
+    "max_epochs": 5,
+    "lr": 0.001,
+    "weight_decay": 0.01,
+    "lambda_repair": 0.5,
+    "lambda_stability": 0.01,
+    "grad_clip": 1.0,
+    "halting": {
+      "lambda_ponder": 0.01,
+      "min_message_steps": 4,
+      "max_message_steps": 16,
+      "init_halt_prob": 0.05
+    },
+    "message_steps_rgcn_fixed": 8
+  },
+  "variants_compared": [
+    "mbs_adaptive_halting",
+    "rgcn_repair_stability",
+    "rgcn_repair_stability_act_warmup_t8"
+  ],
+  "per_variant": {
+    "mbs_adaptive_halting": {
+      "variant": "mbs_adaptive_halting",
+      "parameter_count": 308860,
+      "n_seeds_valid": 3,
+      "metrics": {
+        "ood_mixed_selected": {
+          "mean": 0.9947916666666666,
+          "std": 0.005966895436140417,
+          "n": 3
+        },
+        "ood_mixed_best": {
+          "mean": 0.9947916666666666,
+          "std": 0.005966895436140417,
+          "n": 3
+        },
+        "ood_mixed_final_epoch": {
+          "mean": 0.9947916666666666,
+          "std": 0.005966895436140417,
+          "n": 3
+        },
+        "ood_entity": {
+          "mean": 0.9993489583333334,
+          "std": 0.001127637244510988,
+          "n": 3
+        },
+        "ood_conflict": {
+          "mean": 1.0,
+          "std": 0.0,
+          "n": 3
+        },
+        "ood_rule": {
+          "mean": 1.0,
+          "std": 0.0,
+          "n": 3
+        },
+        "expected_steps": {
+          "mean": 4.524518296122551,
+          "std": 0.32967428088379197,
+          "n": 3
+        },
+        "final_step_mass": {
+          "mean": 0.0010861394012721193,
+          "std": 0.0009753837409748598,
+          "n": 3
+        },
+        "ponder_loss": {
+          "mean": 0.04233894202237328,
+          "std": 0.0013072707746342417,
+          "n": 3
+        },
+        "ood_regression_from_best_epoch": {
+          "mean": 0.0,
+          "std": 0.0,
+          "n": 3
+        },
+        "best_ood_expected_steps": {
+          "mean": 4.524518296122551,
+          "std": 0.32967428088379197,
+          "n": 3
+        }
+      },
+      "per_seed": [
+        {
+          "seed": 1,
+          "summary_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/mbs_adaptive_halting/benchmark_summary.json",
+          "train_results_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/mbs_adaptive_halting/mbs_adaptive_halting_train_results.json",
+          "parameter_count": 308860,
+          "selected_checkpoint_epoch": 5,
+          "selected_checkpoint_ood_mixed_acc": 0.98828125,
+          "best_ood_mixed_epoch": 5,
+          "best_ood_mixed_acc": 0.98828125,
+          "best_ood_expected_steps": 4.900105074048042,
+          "best_ood_final_step_mass": 0.0013709439880699179,
+          "ood_regression_from_best_epoch": 0.0,
+          "final_epoch_ood_mixed_acc": 0.98828125,
+          "ood_entity_acc": 0.998046875,
+          "ood_conflict_acc": 1.0,
+          "ood_rule_acc": 1.0,
+          "ood_mixed_acc_final": 0.98828125,
+          "expected_steps_mean": 4.900105074048042,
+          "final_step_mass_mean": 0.0013709439880699179,
+          "ponder_loss": 0.04374083084985614
+        },
+        {
+          "seed": 2,
+          "summary_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/mbs_adaptive_halting/benchmark_summary.json",
+          "train_results_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/mbs_adaptive_halting/mbs_adaptive_halting_train_results.json",
+          "parameter_count": 308860,
+          "selected_checkpoint_epoch": 5,
+          "selected_checkpoint_ood_mixed_acc": 0.99609375,
+          "best_ood_mixed_epoch": 5,
+          "best_ood_mixed_acc": 0.99609375,
+          "best_ood_expected_steps": 4.390446975827217,
+          "best_ood_final_step_mass": 0.001887420424808681,
+          "ood_regression_from_best_epoch": 0.0,
+          "final_epoch_ood_mixed_acc": 0.99609375,
+          "ood_entity_acc": 1.0,
+          "ood_conflict_acc": 1.0,
+          "ood_rule_acc": 1.0,
+          "ood_mixed_acc_final": 0.99609375,
+          "expected_steps_mean": 4.390446975827217,
+          "final_step_mass_mean": 0.001887420424808681,
+          "ponder_loss": 0.041153242345899343
+        },
+        {
+          "seed": 3,
+          "summary_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/mbs_adaptive_halting/benchmark_summary.json",
+          "train_results_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/mbs_adaptive_halting/mbs_adaptive_halting_train_results.json",
+          "parameter_count": 308860,
+          "selected_checkpoint_epoch": 5,
+          "selected_checkpoint_ood_mixed_acc": 1.0,
+          "best_ood_mixed_epoch": 5,
+          "best_ood_mixed_acc": 1.0,
+          "best_ood_expected_steps": 4.2830028384923935,
+          "best_ood_final_step_mass": 5.3790937758997284e-08,
+          "ood_regression_from_best_epoch": 0.0,
+          "final_epoch_ood_mixed_acc": 1.0,
+          "ood_entity_acc": 1.0,
+          "ood_conflict_acc": 1.0,
+          "ood_rule_acc": 1.0,
+          "ood_mixed_acc_final": 1.0,
+          "expected_steps_mean": 4.2830028384923935,
+          "final_step_mass_mean": 5.3790937758997284e-08,
+          "ponder_loss": 0.042122752871364355
+        }
+      ],
+      "summary_paths": [
+        "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/mbs_adaptive_halting/benchmark_summary.json",
+        "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/mbs_adaptive_halting/benchmark_summary.json",
+        "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/mbs_adaptive_halting/benchmark_summary.json"
+      ]
+    },
+    "rgcn_repair_stability": {
+      "variant": "rgcn_repair_stability",
+      "parameter_count": 176657,
+      "n_seeds_valid": 3,
+      "metrics": {
+        "ood_mixed_selected": {
+          "mean": 0.9440104166666666,
+          "std": 0.002983447718070208,
+          "n": 3
+        },
+        "ood_mixed_best": {
+          "mean": 0.9466145833333334,
+          "std": 0.001127637244510988,
+          "n": 3
+        },
+        "ood_mixed_final_epoch": {
+          "mean": 0.9440104166666666,
+          "std": 0.002983447718070208,
+          "n": 3
+        },
+        "ood_entity": {
+          "mean": 0.947265625,
+          "std": 0.0078125,
+          "n": 3
+        },
+        "ood_conflict": {
+          "mean": 0.9817708333333334,
+          "std": 0.004915256793796061,
+          "n": 3
+        },
+        "ood_rule": {
+          "mean": 0.9811197916666666,
+          "std": 0.008131507810414582,
+          "n": 3
+        },
+        "expected_steps": {
+          "mean": null,
+          "std": null,
+          "n": 0
+        },
+        "final_step_mass": {
+          "mean": null,
+          "std": null,
+          "n": 0
+        },
+        "ponder_loss": {
+          "mean": 0.0,
+          "std": 0.0,
+          "n": 3
+        },
+        "ood_regression_from_best_epoch": {
+          "mean": 0.0026041666666666665,
+          "std": 0.002255274489021976,
+          "n": 3
+        },
+        "best_ood_expected_steps": {
+          "mean": null,
+          "std": null,
+          "n": 0
+        }
+      },
+      "per_seed": [
+        {
+          "seed": 1,
+          "summary_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/rgcn_repair_stability/benchmark_summary.json",
+          "train_results_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/rgcn_repair_stability/rgcn_repair_stability_train_results.json",
+          "parameter_count": 176657,
+          "selected_checkpoint_epoch": 5,
+          "selected_checkpoint_ood_mixed_acc": 0.943359375,
+          "best_ood_mixed_epoch": 4,
+          "best_ood_mixed_acc": 0.947265625,
+          "best_ood_expected_steps": null,
+          "best_ood_final_step_mass": null,
+          "ood_regression_from_best_epoch": 0.00390625,
+          "final_epoch_ood_mixed_acc": 0.943359375,
+          "ood_entity_acc": 0.939453125,
+          "ood_conflict_acc": 0.986328125,
+          "ood_rule_acc": 0.990234375,
+          "ood_mixed_acc_final": 0.943359375,
+          "expected_steps_mean": null,
+          "final_step_mass_mean": null,
+          "ponder_loss": 0.0
+        },
+        {
+          "seed": 2,
+          "summary_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/rgcn_repair_stability/benchmark_summary.json",
+          "train_results_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/rgcn_repair_stability/rgcn_repair_stability_train_results.json",
+          "parameter_count": 176657,
+          "selected_checkpoint_epoch": 5,
+          "selected_checkpoint_ood_mixed_acc": 0.947265625,
+          "best_ood_mixed_epoch": 5,
+          "best_ood_mixed_acc": 0.947265625,
+          "best_ood_expected_steps": null,
+          "best_ood_final_step_mass": null,
+          "ood_regression_from_best_epoch": 0.0,
+          "final_epoch_ood_mixed_acc": 0.947265625,
+          "ood_entity_acc": 0.955078125,
+          "ood_conflict_acc": 0.982421875,
+          "ood_rule_acc": 0.978515625,
+          "ood_mixed_acc_final": 0.947265625,
+          "expected_steps_mean": null,
+          "final_step_mass_mean": null,
+          "ponder_loss": 0.0
+        },
+        {
+          "seed": 3,
+          "summary_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/rgcn_repair_stability/benchmark_summary.json",
+          "train_results_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/rgcn_repair_stability/rgcn_repair_stability_train_results.json",
+          "parameter_count": 176657,
+          "selected_checkpoint_epoch": 5,
+          "selected_checkpoint_ood_mixed_acc": 0.94140625,
+          "best_ood_mixed_epoch": 4,
+          "best_ood_mixed_acc": 0.9453125,
+          "best_ood_expected_steps": null,
+          "best_ood_final_step_mass": null,
+          "ood_regression_from_best_epoch": 0.00390625,
+          "final_epoch_ood_mixed_acc": 0.94140625,
+          "ood_entity_acc": 0.947265625,
+          "ood_conflict_acc": 0.9765625,
+          "ood_rule_acc": 0.974609375,
+          "ood_mixed_acc_final": 0.94140625,
+          "expected_steps_mean": null,
+          "final_step_mass_mean": null,
+          "ponder_loss": 0.0
+        }
+      ],
+      "summary_paths": [
+        "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/rgcn_repair_stability/benchmark_summary.json",
+        "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/rgcn_repair_stability/benchmark_summary.json",
+        "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/rgcn_repair_stability/benchmark_summary.json"
+      ]
+    },
+    "rgcn_repair_stability_act_warmup_t8": {
+      "variant": "rgcn_repair_stability_act_warmup_t8",
+      "parameter_count": 176754,
+      "n_seeds_valid": 3,
+      "metrics": {
+        "ood_mixed_selected": {
+          "mean": 0.9153645833333334,
+          "std": 0.02032876952603645,
+          "n": 3
+        },
+        "ood_mixed_best": {
+          "mean": 0.92578125,
+          "std": 0.005167483029423029,
+          "n": 3
+        },
+        "ood_mixed_final_epoch": {
+          "mean": 0.9153645833333334,
+          "std": 0.02032876952603645,
+          "n": 3
+        },
+        "ood_entity": {
+          "mean": 0.916015625,
+          "std": 0.008950343154210625,
+          "n": 3
+        },
+        "ood_conflict": {
+          "mean": 0.9576822916666666,
+          "std": 0.013718299157360338,
+          "n": 3
+        },
+        "ood_rule": {
+          "mean": 0.9576822916666666,
+          "std": 0.009634536840461422,
+          "n": 3
+        },
+        "expected_steps": {
+          "mean": 7.902072275678317,
+          "std": 0.373293158842662,
+          "n": 3
+        },
+        "final_step_mass": {
+          "mean": 0.06431134017717947,
+          "std": 0.023067210515201032,
+          "n": 3
+        },
+        "ponder_loss": {
+          "mean": 0.07659968295289825,
+          "std": 0.0022881265837508837,
+          "n": 3
+        },
+        "ood_regression_from_best_epoch": {
+          "mean": 0.010416666666666666,
+          "std": 0.018042195912175808,
+          "n": 3
+        },
+        "best_ood_expected_steps": {
+          "mean": 10.716821839412054,
+          "std": 2.1168037267222855,
+          "n": 3
+        }
+      },
+      "per_seed": [
+        {
+          "seed": 1,
+          "summary_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/rgcn_repair_stability_act_warmup_t8/benchmark_summary.json",
+          "train_results_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/rgcn_repair_stability_act_warmup_t8/rgcn_repair_stability_act_warmup_t8_train_results.json",
+          "parameter_count": 176754,
+          "selected_checkpoint_epoch": 5,
+          "selected_checkpoint_ood_mixed_acc": 0.892578125,
+          "best_ood_mixed_epoch": 4,
+          "best_ood_mixed_acc": 0.923828125,
+          "best_ood_expected_steps": 11.566678613424301,
+          "best_ood_final_step_mass": 0.37151059973984957,
+          "ood_regression_from_best_epoch": 0.03125,
+          "final_epoch_ood_mixed_acc": 0.892578125,
+          "ood_entity_acc": 0.908203125,
+          "ood_conflict_acc": 0.958984375,
+          "ood_rule_acc": 0.951171875,
+          "ood_mixed_acc_final": 0.892578125,
+          "expected_steps_mean": 7.571952626109123,
+          "final_step_mass_mean": 0.05296707806701306,
+          "ponder_loss": 0.07427279266994447
+        },
+        {
+          "seed": 2,
+          "summary_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/rgcn_repair_stability_act_warmup_t8/benchmark_summary.json",
+          "train_results_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/rgcn_repair_stability_act_warmup_t8/rgcn_repair_stability_act_warmup_t8_train_results.json",
+          "parameter_count": 176754,
+          "selected_checkpoint_epoch": 5,
+          "selected_checkpoint_ood_mixed_acc": 0.921875,
+          "best_ood_mixed_epoch": 5,
+          "best_ood_mixed_acc": 0.921875,
+          "best_ood_expected_steps": 8.307160317897797,
+          "best_ood_final_step_mass": 0.049112989952845965,
+          "ood_regression_from_best_epoch": 0.0,
+          "final_epoch_ood_mixed_acc": 0.921875,
+          "ood_entity_acc": 0.9140625,
+          "ood_conflict_acc": 0.943359375,
+          "ood_rule_acc": 0.953125,
+          "ood_mixed_acc_final": 0.921875,
+          "expected_steps_mean": 8.307160317897797,
+          "final_step_mass_mean": 0.049112989952845965,
+          "ponder_loss": 0.07884696824476123
+        },
+        {
+          "seed": 3,
+          "summary_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/rgcn_repair_stability_act_warmup_t8/benchmark_summary.json",
+          "train_results_path": "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/rgcn_repair_stability_act_warmup_t8/rgcn_repair_stability_act_warmup_t8_train_results.json",
+          "parameter_count": 176754,
+          "selected_checkpoint_epoch": 5,
+          "selected_checkpoint_ood_mixed_acc": 0.931640625,
+          "best_ood_mixed_epoch": 4,
+          "best_ood_mixed_acc": 0.931640625,
+          "best_ood_expected_steps": 12.276626586914062,
+          "best_ood_final_step_mass": 0.3609991567209363,
+          "ood_regression_from_best_epoch": 0.0,
+          "final_epoch_ood_mixed_acc": 0.931640625,
+          "ood_entity_acc": 0.92578125,
+          "ood_conflict_acc": 0.970703125,
+          "ood_rule_acc": 0.96875,
+          "ood_mixed_acc_final": 0.931640625,
+          "expected_steps_mean": 7.82710388302803,
+          "final_step_mass_mean": 0.09085395251167938,
+          "ponder_loss": 0.07667928794398904
+        }
+      ],
+      "summary_paths": [
+        "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/rgcn_repair_stability_act_warmup_t8/benchmark_summary.json",
+        "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/rgcn_repair_stability_act_warmup_t8/benchmark_summary.json",
+        "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/rgcn_repair_stability_act_warmup_t8/benchmark_summary.json"
+      ]
+    }
+  },
+  "compact_table": [
+    {
+      "variant": "mbs_adaptive_halting",
+      "ood_mixed_mean": 0.9947916666666666,
+      "ood_mixed_std": 0.005966895436140417,
+      "expected_steps_mean": 4.524518296122551,
+      "expected_steps_std": 0.32967428088379197,
+      "accuracy_per_step": 0.21986686793137497,
+      "compute_adjusted_score": 0.9495464837054411,
+      "n_seeds_valid": 3
+    },
+    {
+      "variant": "rgcn_repair_stability",
+      "ood_mixed_mean": 0.9440104166666666,
+      "ood_mixed_std": 0.002983447718070208,
+      "expected_steps_mean": 8.0,
+      "expected_steps_std": 0.0,
+      "accuracy_per_step": 0.11800130208333333,
+      "compute_adjusted_score": 0.8640104166666667,
+      "n_seeds_valid": 3
+    },
+    {
+      "variant": "rgcn_repair_stability_act_warmup_t8",
+      "ood_mixed_mean": 0.9153645833333334,
+      "ood_mixed_std": 0.02032876952603645,
+      "expected_steps_mean": 7.902072275678317,
+      "expected_steps_std": 0.373293158842662,
+      "accuracy_per_step": 0.11583854859828628,
+      "compute_adjusted_score": 0.8363438605765502,
+      "n_seeds_valid": 3
+    }
+  ],
+  "verdict": {
+    "verdict": "mbs_compute_efficient_win",
+    "details": "mbs_ood=0.9948 >= rgcn_fixed_ood-0.02=0.9240, mbs_steps=4.52 <= 0.75*8=6.00, mbs_ood >= rgcn_act_warmup_ood=0.9154"
+  },
+  "verdict_rule": {
+    "name": "mbs_compute_efficient_win",
+    "rule_a": "mbs_adaptive_halting OOD mixed (mean) >= rgcn_repair_stability OOD mixed (mean) - 0.02",
+    "rule_b": "mbs_adaptive_halting expected_steps (mean) <= 0.75 * 8.0",
+    "rule_c": "mbs_adaptive_halting OOD mixed (mean) >= rgcn_repair_stability_act_warmup_t8 OOD mixed (mean)",
+    "all_three_required": true
+  },
+  "claims_supported": [
+    "MBS-Halting outperforms tested RGCN baselines on accuracy/compute tradeoff on belief_repair_hard.",
+    "MBS-Halting uses substantially fewer expected steps than fixed-step RGCN.",
+    "RGCN + ACT-warmup with lambda_ponder=0.01 reduces compute pressure but underperforms MBS-Halting."
+  ],
+  "claims_not_supported": [
+    "difficulty-adaptive halting",
+    "transfer beyond belief_repair_hard",
+    "general reasoning",
+    "stable attractor dynamics"
+  ],
+  "open_concerns": [
+    "possible repair_loss leakage / teacher-forcing concern (not resolved in this version)"
+  ],
+  "known_limitations": [
+    "single task family (belief_repair_hard)",
+    "synthetic benchmark generated by the project's own pipeline",
+    "repair_loss is central and potentially carries structural supervision (audit needed)",
+    "no depth-controlled causal probe yet",
+    "no transfer result in v0.3",
+    "RGCN + ACT-warmup uses a 3-epoch forced-T8 warmup; it is a strong diagnostic baseline, not pure off-the-shelf ACT",
+    "parameter count asymmetry: MBS=308860 vs RGCN=176657 / RGCN+ACT-warmup=176754"
+  ],
+  "reproducibility": {
+    "output_root": "results/belief_repair_hard_3seed_accuracy_compute_v1",
+    "aggregate_paths": {
+      "json": "results/belief_repair_hard_3seed_accuracy_compute_v1/aggregate_summary.json",
+      "md": "results/belief_repair_hard_3seed_accuracy_compute_v1/aggregate_summary.md"
+    },
+    "per_seed_dirs": [
+      "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/",
+      "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/",
+      "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/"
+    ],
+    "config_paths": [
+      "results/belief_repair_hard_3seed_accuracy_compute_v1/seed1/config.yaml",
+      "results/belief_repair_hard_3seed_accuracy_compute_v1/seed2/config.yaml",
+      "results/belief_repair_hard_3seed_accuracy_compute_v1/seed3/config.yaml"
+    ],
+    "campaign_command": "python scripts/run_3seed_accuracy_compute.py --seeds 1 2 3",
+    "aggregate_command": "python scripts/aggregate_3seed_accuracy_compute.py --seeds 1 2 3"
+  },
+  "recommended_paper_framing": {
+    "use": [
+      "compute-efficient belief-graph repair",
+      "short-horizon learned halting",
+      "accuracy/compute tradeoff"
+    ],
+    "avoid": [
+      "adaptive halting",
+      "general reasoning",
+      "emergent cognitive control",
+      "stable attractor dynamics",
+      "transferable reasoning"
+    ]
+  },
+  "related_artifacts": {
+    "claims_note": "docs/MBS_HALTING_V0_3_CLAIMS.md",
+    "main_table_md": "docs/tables/mbs_halting_v0_3_main_table.md",
+    "main_table_csv": "docs/tables/mbs_halting_v0_3_main_table.csv",
+    "manifest_md": "results/belief_repair_hard_3seed_accuracy_compute_v1/ARTIFACT_MANIFEST.md",
+    "manifest_json": "results/belief_repair_hard_3seed_accuracy_compute_v1/ARTIFACT_MANIFEST.json"
+  }
+}

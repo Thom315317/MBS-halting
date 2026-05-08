@@ -1,0 +1,4 @@
+method,params,ood_mixed_mean,ood_mixed_std,expected_steps_mean,expected_steps_std,accuracy_per_step,compute_adjusted_score,verdict_note
+MBS-Halting (v0.3),308860,0.9947916666666666,0.005966895436140417,4.524518296122551,0.32967428088379197,0.21986686793137497,0.9495464837054411,compute-efficient short-horizon halting
+RGCN + repair + stability (fixed T=8),176657,0.9440104166666666,0.002983447718070208,8.0,0.0,0.11800130208333333,0.8640104166666667,strong fixed-step baseline
+RGCN + repair + stability + ACT-warmup,176754,0.9153645833333334,0.02032876952603645,7.902072275678317,0.373293158842662,0.11583854859828628,0.8363438605765502,diagnostic baseline (3-epoch forced-T8 warmup)

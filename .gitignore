@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtualenvs
+.venv/
+venv/
+ENV/
+env/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Test / typing caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Secrets / env
+.env
+.env.*
+*.pem
+*.key
+
+# Experiment runtime artifacts (DO commit aggregate_summary.* and ARTIFACT_MANIFEST.*)
+*.log
+wandb/
+runs/
+outputs/
+
+# Per-run artifacts: keep aggregate, drop the heavy per-seed × per-variant trees
+results/**/checkpoints/
+results/**/seed*/*/checkpoints/
+results/**/seed*/*/run.log
+results/**/seed*/*/*_train_results.json
+results/**/seed*/*/*_eval_results.json
+results/**/seed*/*/*_epoch_metrics.csv
+results/**/seed*/*/benchmark_summary.json
+results/**/seed*/*/benchmark_summary.md
+
+# Model files (heavy)
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# Notebooks scratch
+.ipynb_checkpoints/
