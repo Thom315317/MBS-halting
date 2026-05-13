@@ -781,6 +781,12 @@ def build_cells_and_edges(claims, rule, query_entity, query_attr, answer_value, 
 
 
 def build_belief_repair_datasets(config, tokenizer=None):
+    # H6 reproducibility dependency : the v1 task generator was missing
+    # from the dfb99b0 commit but the committed model + audit + CSV
+    # artefacts all depend on it. See
+    # results/.../H6_REPRO_DEPENDENCY_PATCH_PLAN.md.
+    if config.get("task") == "depth_controlled_latent_halting_probe":
+        return build_depth_controlled_latent_halting_datasets(config, tokenizer)
     if config.get("task") in {"adaptive_halting_probe", "belief_repair_difficulty_ladder"}:
         return build_adaptive_halting_probe_datasets(config, tokenizer)
     seed = int(config.get("seed", 1))
@@ -838,3 +844,342 @@ def build_adaptive_halting_probe_datasets(config, tokenizer=None):
     if any(key in config for key in transform_keys):
         datasets = {split: TransformedDataset(dataset, split, config) for split, dataset in datasets.items()}
     return datasets
+
+
+# =============================================================================
+# v1 depth-controlled latent halting probe generator
+# =============================================================================
+# Lifted from main repo dirty mbs/datasets.py:1182..1520 as part of the
+# H6 reproducibility dependency patch. The committed dfb99b0 state did
+# not include this generator, even though the committed H6 audit script,
+# CSVs, configs, and model expect samples produced by it. See
+# results/claim_strengthening/h7_ordinal_halting/H6_REPRO_DEPENDENCY_PATCH_PLAN.md
+# for the scope analysis.
+#
+# This is NOT an H7 method change. v2 / v3 / v3.1 generators are NOT
+# included here (out of scope).
+
+
+DEPTH_PROBE_RULE_NAME = "trusted_chain_top_wins"
+
+# Depth buckets default to {2,4,6,8} so the trust chain fits inside the
+# existing 8-element SOURCE pool (A..H) without expanding the tokenizer
+# beyond the alphabet it already covers. Users can override with config
+# `depth_buckets` plus a matching `k_max` if they extend the pool.
+DEFAULT_DEPTH_BUCKETS = [2, 4, 6, 8]
+DEFAULT_K_MAX = 8
+
+
+def _build_depth_probe_sample(rng, depths, k_max, value_pool, source_pool,
+                              entity_pool, attribute_pool,
+                              randomize_query_claim_order=True):
+    """Build a single sample for the depth-controlled probe.
+
+    Args:
+        rng: random.Random instance (sample-deterministic).
+        depths: list of allowed depth buckets.
+        k_max: total chain length (constant per dataset).
+        value_pool, source_pool, entity_pool, attribute_pool: token pools.
+        randomize_query_claim_order: shuffle the 4 CLAIM cells in the cells list.
+    """
+    if k_max < max(depths):
+        raise ValueError("k_max must be >= max(depths)")
+    if len(value_pool) < 4:
+        raise ValueError("value_pool must have >= 4 entries")
+    if len(source_pool) < k_max:
+        raise ValueError(f"source_pool must have >= k_max={k_max} entries")
+
+    D = rng.choice(depths)
+    # 4 distinct ranks in {1..D} with min=1, max=D
+    if D >= 4:
+        intermediates = rng.sample(range(2, D), 2)  # 2 picks in [2, D-1]
+    elif D == 2:
+        # only ranks 1 and 2 available — degrade to 2 candidates? No, we still
+        # need 4 distinct CLAIMs, so use the chain up to D=2 plus pad with
+        # later ranks that DON'T determine the winner. We achieve depth=2 by
+        # placing the winner at rank 1 and runner-up at rank 2; the other 2
+        # CLAIMs go to higher ranks (which the model still has to traverse to
+        # rule out, but the winning comparison only requires depth 2).
+        # For simplicity, we drop D=2 from depths if k_max=12 and we want at
+        # least 4 candidates within {1..D}. Here we sample 2 ranks beyond D.
+        higher = rng.sample(range(3, k_max + 1), 2)
+        intermediates = sorted(higher)  # treated as candidates whose ranks > D
+    else:
+        # D = 3: ranks 2 and any of {3..K_MAX}
+        higher_pool = list(range(2, k_max + 1))
+        higher_pool.remove(D)  # ensure D is reserved for runner-up
+        higher = rng.sample(higher_pool, 2)
+        intermediates = sorted(higher)
+    candidate_ranks = [1, D] + list(intermediates)
+    # Re-sort and dedupe (just in case for D=2)
+    candidate_ranks = sorted(set(candidate_ranks))
+    while len(candidate_ranks) < 4:
+        # fall back: sample more ranks from {2..k_max} that aren't already used
+        avail = [r for r in range(2, k_max + 1) if r not in candidate_ranks]
+        candidate_ranks.append(rng.choice(avail))
+        candidate_ranks = sorted(set(candidate_ranks))
+    # Trim if accidentally longer than 4 (shouldn't happen for D >= 4 normally)
+    candidate_ranks = candidate_ranks[:4]
+
+    # 4 distinct values
+    values = rng.sample(value_pool, 4)
+    answer_value = values[0]  # the winner's value (rank=1 candidate)
+    # Pair (rank, value): rank=1 -> values[0], the other ranks -> values[1..3]
+    rank_to_value = {candidate_ranks[0]: values[0]}
+    for i, r in enumerate(candidate_ranks[1:], start=1):
+        rank_to_value[r] = values[i]
+
+    # Build the chain by assigning K_MAX source IDs to ranks 1..K_MAX
+    # uniformly at random, so source identity is decoupled from rank.
+    sources_in_chain = rng.sample(source_pool, k_max)
+    # rank -> source name
+    rank_to_source = {rank: sources_in_chain[rank - 1] for rank in range(1, k_max + 1)}
+    # source -> rank (for the gold-oracle audit only)
+    source_to_rank = {s: r for r, s in rank_to_source.items()}
+
+    # Choose a query (entity, attribute) — any will do since the rule
+    # ignores them; values differ across CLAIMs.
+    query_entity = rng.choice(entity_pool)
+    query_attr = rng.choice(attribute_pool)
+
+    # Build cells in a deterministic order:
+    #   ENTITY (1), ATTRIBUTE (1), VALUE (4), SOURCE (k_max), RULE (1),
+    #   QUERY (1), CLAIM (4)
+    cells = []
+
+    def add_cell(cell_type, text, **extra):
+        idx = len(cells)
+        cells.append({"type": cell_type, "text": text, **extra})
+        return idx
+
+    entity_idx = add_cell("ENTITY", query_entity)
+    attribute_idx = add_cell("ATTRIBUTE", query_attr)
+    value_idx_by_value = {v: add_cell("VALUE", v) for v in values}
+    source_idx_by_name = {s: add_cell("SOURCE", s) for s in sources_in_chain}
+    rule_idx = add_cell("RULE", DEPTH_PROBE_RULE_NAME)
+    query_node_idx = add_cell("QUERY", f"query {query_entity} {query_attr}")
+
+    # CLAIM cells — text mirrors the legacy generator format so the
+    # tokenizer encodes them unambiguously.
+    claim_specs = []  # list of (rank, value, source_name)
+    for rank in candidate_ranks:
+        claim_specs.append((rank, rank_to_value[rank], rank_to_source[rank]))
+    if randomize_query_claim_order:
+        rng.shuffle(claim_specs)
+
+    claim_node_idx_list = []
+    for rank, value, source_name in claim_specs:
+        text = f"{query_entity} {query_attr} {value} {source_name} t1"
+        idx = add_cell("CLAIM", text, conflict=0)
+        claim_node_idx_list.append((idx, rank, value, source_name))
+
+    # Edges
+    edges = []
+
+    def add_edge(src, dst, edge_type, bidirectional=True):
+        edges.append({"src": int(src), "dst": int(dst), "type": edge_type, "provenance": "depth_probe"})
+        if bidirectional:
+            edges.append({"src": int(dst), "dst": int(src), "type": edge_type, "provenance": "depth_probe"})
+
+    # Schema edges
+    add_edge(entity_idx, attribute_idx, "HAS_ATTRIBUTE")
+    for v_idx in value_idx_by_value.values():
+        add_edge(attribute_idx, v_idx, "HAS_VALUE")
+
+    # CLAIM-side edges
+    for claim_node, rank, value, source_name in claim_node_idx_list:
+        add_edge(claim_node, entity_idx, "CLAIM_ENTITY")
+        add_edge(claim_node, attribute_idx, "CLAIM_ATTRIBUTE")
+        add_edge(claim_node, value_idx_by_value[value], "CLAIM_VALUE")
+        add_edge(claim_node, source_idx_by_name[source_name], "FROM_SOURCE")
+        add_edge(rule_idx, claim_node, "RULE_APPLIES")
+
+    # Trust chain edges (the depth-controlled core)
+    for r in range(1, k_max):
+        more_idx = source_idx_by_name[rank_to_source[r]]      # higher rank (more reliable)
+        less_idx = source_idx_by_name[rank_to_source[r + 1]]  # lower rank
+        add_edge(more_idx, less_idx, "MORE_RELIABLE_THAN", bidirectional=True)
+
+    # Query edges
+    add_edge(query_node_idx, entity_idx, "QUERY_ENTITY")
+    add_edge(query_node_idx, attribute_idx, "QUERY_ATTRIBUTE")
+
+    # Answer label
+    answer_class = VALUES.index(answer_value)
+
+    # Per-node fields
+    n_nodes = len(cells)
+    is_query_claim_node = [False] * n_nodes
+    is_winner_query_claim_node = [False] * n_nodes
+    claim_source_is_trusted = [False] * n_nodes
+    claim_is_rolled_back = [False] * n_nodes
+    claim_value_ids = [-1] * n_nodes
+    repair_labels = [-100] * n_nodes
+    conflict_labels = [0] * n_nodes
+    for claim_node, rank, value, source_name in claim_node_idx_list:
+        is_query_claim_node[claim_node] = True
+        if rank == 1:
+            is_winner_query_claim_node[claim_node] = True
+        if rank == 1:
+            claim_source_is_trusted[claim_node] = True
+        # claim_value_ids = the asserted value (NOT the answer)
+        claim_value_ids[claim_node] = VALUES.index(value)
+        # repair_label is left at -100 — the latent task does NOT use it.
+        # We still set query CLAIMs to the answer for legacy compatibility
+        # IF and only if a downstream task switches repair_loss_mode away
+        # from "none" — which our config forbids.
+        repair_labels[claim_node] = answer_class
+    repair_labels[query_node_idx] = answer_class
+
+    text = " ".join(c["text"] for c in cells if c["type"] == "CLAIM")
+
+    metadata = {
+        "task": "depth_controlled_latent_halting_probe",
+        "rule": DEPTH_PROBE_RULE_NAME,
+        "oracle_depth": int(D),
+        "depth_bucket": int(D),
+        "chain_length": int(k_max - 1),
+        "k_max": int(k_max),
+        "graph_num_nodes": n_nodes,
+        "graph_num_edges": len(edges),
+        "winner_rank": 1,
+        "runner_up_rank": int(D),
+        "candidate_ranks_used": list(candidate_ranks),
+        "rank_to_source": {int(k): str(v) for k, v in rank_to_source.items()},
+        "source_to_rank": {str(k): int(v) for k, v in source_to_rank.items()},
+        "query_entity": query_entity,
+        "query_attr": query_attr,
+        "query_node_idx": query_node_idx,
+        "claims": [
+            {"entity": query_entity, "attr": query_attr, "value": value,
+             "source": source_name, "time": 1, "rank": rank,
+             "is_winner_audit": (rank == 1)}
+            for _, rank, value, source_name in claim_node_idx_list
+        ],
+    }
+    return {
+        "text": text,
+        "answer_class": answer_class,
+        "query_entity": query_entity,
+        "query_attr": query_attr,
+        "target_value": answer_value,
+        "belief_cells": cells,
+        "edges": edges,
+        "corrupted_cells": [dict(c) for c in cells],
+        "target_cells": [dict(c) for c in cells],
+        "repair_labels": repair_labels,
+        "is_query_claim_node": is_query_claim_node,
+        "is_winner_query_claim_node": is_winner_query_claim_node,
+        "claim_source_is_trusted": claim_source_is_trusted,
+        "claim_is_rolled_back": claim_is_rolled_back,
+        "claim_value_ids": claim_value_ids,
+        "conflict_labels": conflict_labels,
+        "mode_labels": None,
+        "metadata": metadata,
+    }
+
+
+def _depth_probe_split_profile(split):
+    """Per-split allowed depth-bucket lists. We keep depths uniform across all
+    splits so OOD differences come from the standard split shifts (entity /
+    rule pools), not from depth distribution shifts.
+
+    For now all splits use the same bucket list; future variants could OOD-shift
+    by holding out depths.
+    """
+    return DEFAULT_DEPTH_BUCKETS
+
+
+class DepthControlledLatentHaltingProbeDataset(Dataset):
+    def __init__(self, size, split="train", seed=1, depths=None, k_max=DEFAULT_K_MAX,
+                 randomize_query_claim_order=True):
+        self.size = int(size)
+        self.split = split
+        self.seed = int(seed)
+        self.depths = list(depths) if depths is not None else _depth_probe_split_profile(split)
+        self.k_max = int(k_max)
+        self.randomize_query_claim_order = bool(randomize_query_claim_order)
+        # Pools — the SOURCE pool stays at the existing 8-element alphabet so
+        # the existing tokenizer covers it without modification. k_max <= 8.
+        if self.k_max > len(SOURCES):
+            raise ValueError(
+                f"k_max={self.k_max} > len(SOURCES)={len(SOURCES)}. "
+                "Extend the tokenizer pool before raising k_max."
+            )
+        self.source_pool = SOURCES[: self.k_max]
+        self.entity_pool = ENTITIES[:]
+        self.attribute_pool = ATTRIBUTES[:]
+        self.value_pool = VALUES[:]
+        self.samples = [
+            _build_depth_probe_sample(
+                random.Random(self.seed * 100_000 + idx),
+                self.depths, self.k_max,
+                self.value_pool, self.source_pool,
+                self.entity_pool, self.attribute_pool,
+                randomize_query_claim_order=self.randomize_query_claim_order,
+            )
+            for idx in range(self.size)
+        ]
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
+def build_depth_controlled_latent_halting_datasets(config, tokenizer=None):
+    seed = int(config.get("seed", 1))
+    depths = list(config.get("depth_buckets", DEFAULT_DEPTH_BUCKETS))
+    k_max = int(config.get("k_max", DEFAULT_K_MAX))
+    randomize_qc = bool(config.get("randomize_query_claim_order", True))
+    datasets = {
+        "train": DepthControlledLatentHaltingProbeDataset(
+            config.get("train_size", 5000), "train", seed,
+            depths=depths, k_max=k_max,
+            randomize_query_claim_order=randomize_qc,
+        ),
+        "val": DepthControlledLatentHaltingProbeDataset(
+            config.get("val_size", 512), "val", seed + 1,
+            depths=depths, k_max=k_max,
+            randomize_query_claim_order=randomize_qc,
+        ),
+        # OOD splits are currently same-distribution; differentiated only by seed.
+        # OOD-shifted depth distributions can be added later via depth_buckets_ood_*.
+        "ood_entity": DepthControlledLatentHaltingProbeDataset(
+            config.get("ood_size", 512), "ood_entity", seed + 2,
+            depths=depths, k_max=k_max,
+            randomize_query_claim_order=randomize_qc,
+        ),
+        "ood_conflict": DepthControlledLatentHaltingProbeDataset(
+            config.get("ood_size", 512), "ood_conflict", seed + 3,
+            depths=depths, k_max=k_max,
+            randomize_query_claim_order=randomize_qc,
+        ),
+        "ood_rule": DepthControlledLatentHaltingProbeDataset(
+            config.get("ood_size", 512), "ood_rule", seed + 4,
+            depths=depths, k_max=k_max,
+            randomize_query_claim_order=randomize_qc,
+        ),
+        "ood_mixed": DepthControlledLatentHaltingProbeDataset(
+            config.get("ood_size", 512), "ood_mixed", seed + 5,
+            depths=depths, k_max=k_max,
+            randomize_query_claim_order=randomize_qc,
+        ),
+    }
+    return datasets
+
+
+def depth_probe_gold_oracle(sample):
+    """Non-neural oracle: read the rank-1 source from metadata, return its value.
+    Used by the smoke test to verify the generator produces consistent samples.
+    """
+    meta = sample["metadata"]
+    rank_to_source = meta["rank_to_source"]
+    top_source = rank_to_source[1] if 1 in rank_to_source else rank_to_source["1"]
+    for c in meta["claims"]:
+        if c["source"] == top_source:
+            return c["value"]
+    return None
+
+

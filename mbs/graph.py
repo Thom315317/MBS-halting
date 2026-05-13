@@ -29,6 +29,11 @@ EDGE_TYPES = {
     "QUERY_ENTITY": 9,
     "QUERY_ATTRIBUTE": 10,
     "TEMPORAL_NEXT": 11,
+    # Used by the depth_controlled_latent_halting_probe (v1) task only.
+    # Bidirectional "more reliable than" relation. Lifted from the
+    # main-repo dirty mbs/graph.py as part of the H6 reproducibility
+    # dependency patch ; see results/.../H6_REPRO_DEPENDENCY_PATCH_PLAN.md.
+    "MORE_RELIABLE_THAN": 12,
 }
 
 OPERATION_MODES = {
@@ -51,6 +56,7 @@ MODE_FOR_EDGE_TYPE = {
     EDGE_TYPES["QUERY_ENTITY"]: OPERATION_MODES["PROPAGATE"],
     EDGE_TYPES["QUERY_ATTRIBUTE"]: OPERATION_MODES["PROPAGATE"],
     EDGE_TYPES["TEMPORAL_NEXT"]: OPERATION_MODES["STABILIZE"],
+    EDGE_TYPES["MORE_RELIABLE_THAN"]: OPERATION_MODES["RESOLVE_CONFLICT"],
 }
 
 
@@ -79,6 +85,11 @@ def collate_graph_samples(samples, tokenizer, max_text_len=160):
     conflict_labels = torch.zeros(batch_size, max_nodes, dtype=torch.float)
     conflict_mask = torch.zeros(batch_size, max_nodes, dtype=torch.bool)
     repair_labels = torch.full((batch_size, max_nodes), -100, dtype=torch.long)
+    # v1 enriched-halting fields. Default to all-False / -1 sentinel for
+    # samples that do not carry per-node lists (back-compat with all
+    # non-v1 generators).
+    is_query_claim_node = torch.zeros(batch_size, max_nodes, dtype=torch.bool)
+    claim_value_ids = torch.full((batch_size, max_nodes), -1, dtype=torch.long)
     mode_labels = torch.full((batch_size, max_edges), -100, dtype=torch.long)
     text_ids = torch.zeros(batch_size, max_text, dtype=torch.long)
     text_mask = torch.zeros(batch_size, max_text, dtype=torch.bool)
@@ -90,6 +101,8 @@ def collate_graph_samples(samples, tokenizer, max_text_len=160):
         target_value_id[batch_idx] = sample["answer_class"]
         query_node_idx[batch_idx] = sample["metadata"]["query_node_idx"]
         sample_repair_labels = sample.get("repair_labels")
+        sample_is_query_claim_node = sample.get("is_query_claim_node")
+        sample_claim_value_ids = sample.get("claim_value_ids")
         for node_idx, cell in enumerate(cells):
             cell_type_ids[batch_idx, node_idx] = CELL_TYPES[cell["type"]]
             cell_token_ids[batch_idx, node_idx] = tokenizer.encode_cell(cell["text"])
@@ -98,6 +111,10 @@ def collate_graph_samples(samples, tokenizer, max_text_len=160):
                 conflict_labels[batch_idx, node_idx] = float(cell.get("conflict", 0))
             if sample_repair_labels is not None and node_idx < len(sample_repair_labels):
                 repair_labels[batch_idx, node_idx] = int(sample_repair_labels[node_idx])
+            if sample_is_query_claim_node is not None and node_idx < len(sample_is_query_claim_node):
+                is_query_claim_node[batch_idx, node_idx] = bool(sample_is_query_claim_node[node_idx])
+            if sample_claim_value_ids is not None and node_idx < len(sample_claim_value_ids):
+                claim_value_ids[batch_idx, node_idx] = int(sample_claim_value_ids[node_idx])
 
         edge_mask[batch_idx, : len(edges)] = True
         for edge_idx, edge in enumerate(edges):
@@ -123,6 +140,8 @@ def collate_graph_samples(samples, tokenizer, max_text_len=160):
         "conflict_labels": conflict_labels,
         "conflict_mask": conflict_mask,
         "repair_labels": repair_labels,
+        "is_query_claim_node": is_query_claim_node,
+        "claim_value_ids": claim_value_ids,
         "mode_labels": mode_labels,
         "text_ids": text_ids,
         "text_mask": text_mask,
@@ -177,7 +196,12 @@ def permute_sample_nodes(sample, seed=1):
         if key in permuted and isinstance(permuted[key], list) and len(permuted[key]) == num_nodes:
             permuted[key] = [permuted[key][old_idx] for old_idx in permutation]
 
-    for key in ("repair_labels", "conflict_labels"):
+    for key in (
+        "repair_labels",
+        "conflict_labels",
+        "is_query_claim_node",
+        "claim_value_ids",
+    ):
         if key in permuted and isinstance(permuted[key], list) and len(permuted[key]) == num_nodes:
             permuted[key] = [permuted[key][old_idx] for old_idx in permutation]
 

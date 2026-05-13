@@ -1,0 +1,156 @@
+# H6_REPRO_DEPENDENCY_EXTRACTED_DIFF.patch
+#
+# Minimal v1-task reproducibility-dependency patch for committed
+# `dfb99b0`. Documents the exact hunks lifted from the main repo's
+# dirty mbs/{graph,datasets}.py without applying the full +52/+1130
+# dirty diffs.
+#
+# This is NOT a `patch -p1`-applicable file. It is a documentation
+# of the exact subset extracted. The actual patching is done via
+# manual `Edit` calls inside the H7 worktree, so each hunk is
+# reviewable.
+#
+# ============================================================
+# (1) mbs/graph.py — 12 LOC across 7 minimal hunks
+# ============================================================
+#
+# Hunk g1 : add MORE_RELIABLE_THAN to EDGE_TYPES (v1 trust chain).
+#   AFTER:  "TEMPORAL_NEXT": 11,
+#   INSERT: "MORE_RELIABLE_THAN": 12,   # v1 only ; bidirectional trust chain
+#
+# Hunk g2 : add the mode mapping for MORE_RELIABLE_THAN.
+#   AFTER:  EDGE_TYPES["TEMPORAL_NEXT"]: OPERATION_MODES["STABILIZE"],
+#   INSERT: EDGE_TYPES["MORE_RELIABLE_THAN"]: OPERATION_MODES["RESOLVE_CONFLICT"],
+#
+# Hunk g3 : add the two tensor allocations in collate_graph_samples.
+#   AFTER:  repair_labels = torch.full((batch_size, max_nodes), -100, dtype=torch.long)
+#   INSERT: is_query_claim_node = torch.zeros(batch_size, max_nodes, dtype=torch.bool)
+#           claim_value_ids = torch.full((batch_size, max_nodes), -1, dtype=torch.long)
+#
+# Hunk g4 : read the two new sample-level lists.
+#   AFTER:  sample_repair_labels = sample.get("repair_labels")
+#   INSERT: sample_is_query_claim_node = sample.get("is_query_claim_node")
+#           sample_claim_value_ids = sample.get("claim_value_ids")
+#
+# Hunk g5 : per-node propagation inside the existing for-loop.
+#   AFTER:  if sample_repair_labels is not None and node_idx < len(sample_repair_labels):
+#               repair_labels[batch_idx, node_idx] = int(sample_repair_labels[node_idx])
+#   INSERT: if sample_is_query_claim_node is not None and node_idx < len(sample_is_query_claim_node):
+#               is_query_claim_node[batch_idx, node_idx] = bool(sample_is_query_claim_node[node_idx])
+#           if sample_claim_value_ids is not None and node_idx < len(sample_claim_value_ids):
+#               claim_value_ids[batch_idx, node_idx] = int(sample_claim_value_ids[node_idx])
+#
+# Hunk g6 : add the two keys to the returned dict.
+#   AFTER:  "repair_labels": repair_labels,
+#   INSERT: "is_query_claim_node": is_query_claim_node,
+#           "claim_value_ids": claim_value_ids,
+#
+# Hunk g7 (optional, defensive) : add the two field names to
+# `permute_sample_nodes` so node permutation reorders them
+# correctly. NOT strictly required by H6 configs but documented in
+# dirty main.
+#   (Decision : INCLUDED, since the cost is trivial and the
+#   correctness guarantee is meaningful when permutation is on.)
+#
+# DELIBERATELY EXCLUDED from dirty graph.py :
+#   * MORE_RELIABLE_THAN_FORWARD (13) and MORE_RELIABLE_THAN_BACKWARD (14)
+#     edge types — v2 only.
+#   * Their MODE_FOR_EDGE_TYPE entries.
+#   * `is_winner_query_claim_node`, `claim_source_is_trusted`,
+#     `claim_is_rolled_back` collate tensors — not consumed by
+#     `mbs/model.py` nor `mbs/baselines.py` at any point.
+#
+# ============================================================
+# (2) mbs/datasets.py — ~330 LOC : v1 generator + 2-line if-branch
+# ============================================================
+#
+# Hunk d1 : add the if-branch at the top of build_belief_repair_datasets.
+#   AFTER:  def build_belief_repair_datasets(config, tokenizer=None):
+#   INSERT (BEFORE the existing "if config.get('task') in {'adaptive...}" line):
+#           if config.get("task") == "depth_controlled_latent_halting_probe":
+#               return build_depth_controlled_latent_halting_datasets(config, tokenizer)
+#
+# Hunk d2 : append the v1 generator block at end of file.
+#   Block contents (~323 lines extracted from dirty
+#   `/home/thom315/MBS-halting/mbs/datasets.py:1182..1520` by
+#   awk-cut at the v2 banner) :
+#
+#     * `DEPTH_PROBE_RULE_NAME = "trusted_chain_top_wins"`
+#     * `DEFAULT_DEPTH_BUCKETS = [2, 4, 6, 8]`
+#     * `DEFAULT_K_MAX = 8`
+#     * function `_build_depth_probe_sample(rng, depths, k_max, ...)`
+#       — the v1 single-sample generator. Builds a graph with
+#       ENTITY+ATTRIBUTE+VALUE×4+SOURCE×k_max+RULE+QUERY+CLAIM×4
+#       nodes, the trust chain via MORE_RELIABLE_THAN edges, and
+#       fills the per-node fields `is_query_claim_node`,
+#       `is_winner_query_claim_node`, `claim_source_is_trusted`,
+#       `claim_is_rolled_back`, `claim_value_ids`, `repair_labels`.
+#       Metadata carries `winner_rank`, `runner_up_rank`,
+#       `candidate_ranks_used`, `rank_to_source`, etc. — exactly the
+#       fields the H6 audit script reads.
+#     * function `_depth_probe_split_profile(split)` — uniform across
+#       splits (so OOD differences come from seed only, not depth
+#       distribution shifts).
+#     * class `DepthControlledLatentHaltingProbeDataset(Dataset)` —
+#       eagerly generates self.size samples in __init__ ; matches
+#       the existing dataset shape contract.
+#     * function `build_depth_controlled_latent_halting_datasets(config,
+#       tokenizer=None)` — returns the train / val / ood_{entity,
+#       conflict, rule, mixed} dict.
+#     * function `depth_probe_gold_oracle(sample)` — non-neural
+#       oracle for smoke-audit only (returns the rank-1 claim's
+#       value).
+#
+# DELIBERATELY EXCLUDED from dirty datasets.py :
+#   * The v2 / v2_small generators (`_build_depth_probe_v2_sample`,
+#     `_build_depth_probe_v2_small_sample`, the v2 dataset class,
+#     the v2 builder).
+#   * The v3 / v3_1 generators (~1022 lines of additions).
+#   * Modifications to `build_cells_and_edges` return signature
+#     (used only by belief_repair generators, not by v1 — v1 builds
+#     its own cells/edges).
+#   * Modifications to existing belief_repair / adaptive_halting_probe
+#     generators to add the 3 unused per-node fields (the dirty diff
+#     adds them ; the committed v1 generator we lift already produces
+#     them, so we don't need to backport them into BeliefRepair).
+#   * Hard-coded entity / attribute / rule list additions related to
+#     v2 / v3 hardness ramp.
+#
+# ============================================================
+# (3) Files NOT modified
+# ============================================================
+#
+#   * mbs/benchmark.py    : not needed.
+#   * mbs/tokenizer.py    : not needed ; v1 uses SOURCES[: k_max=8],
+#                           which is already in the committed tokenizer.
+#   * mbs/model.py        : already supports enriched halting ;
+#                           reads is_query_claim_node + claim_value_ids
+#                           from the batch dict.
+#   * mbs/baselines.py    : same.
+#   * mbs/halting.py      : ordinal helpers added in a separate file.
+#   * mbs/train.py        : H7 patches are H7-method patches, NOT this
+#                           reproducibility patch.
+#
+# ============================================================
+# (4) Verification
+# ============================================================
+#
+# Post-patch verification commands (run inside the H7 worktree) :
+#
+#   git diff --stat -- mbs/graph.py mbs/datasets.py
+#   # Expected : approx graph.py +12 / datasets.py +330
+#
+#   grep -nE 'MORE_RELIABLE_THAN_FORWARD|MORE_RELIABLE_THAN_BACKWARD' mbs/graph.py
+#   # Expected : empty (v2 not lifted)
+#
+#   grep -nE '_v2|_v3|_v3_1|depth_probe_v2|depth_probe_v3' mbs/datasets.py
+#   # Expected : empty (only v1 lifted)
+#
+#   pytest tests/ -q
+#   # Expected : 14/14 passed (no regression)
+#
+#   python scripts/_smoke_h7_compat.py
+#   # Expected : 5/5 smoke tests pass.
+#
+# If any expectation fails, abort and write
+# H6_REPRO_DEPENDENCY_STILL_BLOCKED.md with the failure mode.
