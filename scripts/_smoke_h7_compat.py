@@ -138,14 +138,25 @@ def smoke_4_compute_loss_h7():
     tok = SimpleTokenizer()
     m = build_model("rgcn_h7_two_stage", cfg, tok)
     loaders = make_loaders(cfg, tok)
-    batch = next(iter(loaders["train"]))
-    out = m(batch)
-    loss, parts = compute_loss(out, batch, cfg, "rgcn_h7_two_stage")
-    check("loss is finite", torch.isfinite(loss).item(),
+    # The v1 bucket distribution is skewed (h=6,7,8 are minority) so
+    # individual batches occasionally have zero feasible adjacent-bucket
+    # pairs. Iterate up to N batches looking for one with pairs > 0.
+    found_pairs = False
+    loss = None; parts = None
+    for batch_idx, batch in enumerate(loaders["train"]):
+        out = m(batch)
+        loss, parts = compute_loss(out, batch, cfg, "rgcn_h7_two_stage")
+        if float(parts.get("ordinal_pairs_total", 0)) > 0:
+            found_pairs = True
+            break
+        if batch_idx >= 9:   # 10 batches should be enough at 84 % feasibility
+            break
+    check("loss is finite (last batch)", torch.isfinite(loss).item(),
           f"loss={float(loss):.4f}")
     check("ordinal_loss in parts", "ordinal_loss" in parts,
           f"keys={[k for k in parts.keys() if 'ordinal' in k]}")
-    check("ordinal_pairs_total > 0", float(parts.get("ordinal_pairs_total", 0)) > 0,
+    check("found a batch with ordinal_pairs_total > 0 within 10 tries",
+          found_pairs,
           f"pairs_total={parts.get('ordinal_pairs_total')}")
 
 

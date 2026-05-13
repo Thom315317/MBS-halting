@@ -1,0 +1,28 @@
+diff --git a/mbs/tokenizer.py b/mbs/tokenizer.py
+index 737c9a5..291d0fc 100644
+--- a/mbs/tokenizer.py
++++ b/mbs/tokenizer.py
+@@ -41,6 +41,8 @@ class SimpleTokenizer:
+             "earliest_wins",
+             "second_latest_wins",
+             "least_reliable_source_wins",
++            # Used by the depth_controlled_latent_halting_probe task only.
++            "trusted_chain_top_wins",
+         ]
+         entities = [
+             "Alice",
+@@ -69,7 +71,13 @@ class SimpleTokenizer:
+             "Quinn",
+             "Ruth",
+         ]
+-        sources = ["A", "B", "C", "D", "E", "F", "G", "H"]
++        # SOURCES extended from 8 (A..H) to 20 (A..T) for the
++        # depth_controlled_latent_halting_probe_v2 task, which needs k_max up
++        # to 20. The first 8 IDs are unchanged so v1 / v0.4 / belief_repair_*
++        # checkpoints reload bit-identically (they only ever saw A..H).
++        sources = ["A", "B", "C", "D", "E", "F", "G", "H",
++                   "I", "J", "K", "L", "M", "N", "O", "P",
++                   "Q", "R", "S", "T"]
+         values = ["Paris", "Berlin", "Rome", "London", "Madrid", "Oslo", "Tokyo", "Cairo"]
+         self.tokens = []
+         self.token_to_id = {}
