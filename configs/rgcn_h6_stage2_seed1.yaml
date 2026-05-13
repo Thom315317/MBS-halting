@@ -1,0 +1,55 @@
+# RGCN + H6_detached_aux protocol, Stage 2 (H5b-style co-train of
+# halting_controller + claim_selector_head), seed 1. Init from this
+# seed's Stage 1 best checkpoint. Backbone + token / type embeddings
+# stay frozen via trainable_modules whitelist.
+
+seed: 1
+device: cuda_if_available
+task: depth_controlled_latent_halting_probe
+hard_dataset: false
+
+depth_buckets: [2, 4, 6, 8]
+k_max: 8
+randomize_query_claim_order: true
+
+train_size: 5000
+val_size: 512
+ood_size: 512
+
+batch_size: 16
+max_epochs: 5
+lr: 0.001
+weight_decay: 0.01
+
+d_state: 96
+num_cell_types: 8
+num_edge_types: 13
+num_operation_modes: 4
+max_cells_train: 96
+max_cells_ood: 192
+message_steps: 16
+dropout: 0.1
+
+lambda_answer: 1.0
+lambda_conflict: 0.0
+lambda_repair: 0.0
+lambda_stability: 0.01
+lambda_mode_entropy: 0.0
+grad_clip: 1.0
+
+halting:
+  enabled: true
+  max_message_steps: 16
+  min_message_steps: 2
+  lambda_ponder: 0.01
+  init_halt_prob: 0.05
+  detach_aux_features_from_selector: true
+  enriched: true
+  enriched_hidden: [128, 64]
+
+repair_loss_mode: none
+answer_readout_mode: latent_claim_selector
+latent_selector_query_only: true
+
+trainable_modules: [halting_controller, claim_selector_head]
+init_from_checkpoint: results/claim_strengthening/rgcn_h6_two_stage/seed1/stage1/checkpoints/rgcn_h6_two_stage_best.pt

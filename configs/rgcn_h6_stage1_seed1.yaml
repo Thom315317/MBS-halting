@@ -1,0 +1,61 @@
+# RGCN + H6_detached_aux protocol, Stage 1 (H4-style controller-only),
+# seed 1. Init from the existing RGCN ACT post-patch best.pt (analog of
+# H6's "init from H1b MBS checkpoint"). Backbone + selector head frozen,
+# only halting_controller trains. Enriched MLP controller with 5 anytime
+# aux features (normalized_step, selector_entropy_t, selector_max_prob_t,
+# value_margin_t, delta_value_margin_t), aux features detached from the
+# selector (default).
+
+seed: 1
+device: cuda_if_available
+task: depth_controlled_latent_halting_probe
+hard_dataset: false
+
+depth_buckets: [2, 4, 6, 8]
+k_max: 8
+randomize_query_claim_order: true
+
+train_size: 5000
+val_size: 512
+ood_size: 512
+
+batch_size: 16
+max_epochs: 5
+lr: 0.001
+weight_decay: 0.01
+
+# Match the RGCN ACT post-patch backbone exactly (num_edge_types=13 mirrors
+# rgcn_act_postpatch_seed*.yaml so init_from_checkpoint loads the trained
+# rel_linears 0..12 — including MORE_RELIABLE_THAN at index 12).
+d_state: 96
+num_cell_types: 8
+num_edge_types: 13
+num_operation_modes: 4
+max_cells_train: 96
+max_cells_ood: 192
+message_steps: 16
+dropout: 0.1
+
+lambda_answer: 1.0
+lambda_conflict: 0.0
+lambda_repair: 0.0
+lambda_stability: 0.01
+lambda_mode_entropy: 0.0
+grad_clip: 1.0
+
+halting:
+  enabled: true
+  max_message_steps: 16
+  min_message_steps: 2
+  lambda_ponder: 0.01
+  init_halt_prob: 0.05
+  detach_aux_features_from_selector: true
+  enriched: true
+  enriched_hidden: [128, 64]
+
+repair_loss_mode: none
+answer_readout_mode: latent_claim_selector
+latent_selector_query_only: true
+
+controller_only: true
+init_from_checkpoint: results/claim_strengthening/rgcn_act_postpatch/seed1/checkpoints/rgcn_repair_stability_act_warmup_t8_best.pt
