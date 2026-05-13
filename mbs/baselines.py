@@ -1,7 +1,12 @@
 import torch
 from torch import nn
 
-from .halting import AdaptiveHaltingController
+from .graph import CELL_TYPES
+from .halting import (
+    AdaptiveHaltingController,
+    EnrichedAdaptiveHaltingController,
+    compute_halt_aux_features,
+)
 
 
 class RelationalGCNClassifier(nn.Module):
@@ -139,10 +144,27 @@ class RelationalGCNHaltingClassifier(nn.Module):
         self.answer_head = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, num_values))
         self.conflict_head = nn.Linear(d_model, 1)
         self.repair_head = nn.Linear(d_model, num_values)
-        self.halting_controller = AdaptiveHaltingController(
-            d_state=d_model,
-            init_halt_prob=halting_config.get("init_halt_prob", 0.05),
+        # Mirror MBSModel: dedicated head for the latent claim selector so
+        # compute_loss step-aware path can run on this RGCN ACT baseline.
+        self.claim_selector_head = nn.Linear(d_model, 1)
+        # Mirror MBSModel: optional enriched halting controller with anytime
+        # aux features (used by the rgcn_h6_two_stage protocol). When False
+        # (default), behavior is identical to the rgcn_act_postpatch baseline.
+        self.enriched_halting = bool(halting_config.get("enriched", False))
+        self.detach_aux_features_from_selector = bool(
+            halting_config.get("detach_aux_features_from_selector", True)
         )
+        if self.enriched_halting:
+            self.halting_controller = EnrichedAdaptiveHaltingController(
+                d_state=d_model,
+                init_halt_prob=halting_config.get("init_halt_prob", 0.05),
+                hidden=tuple(halting_config.get("enriched_hidden", (128, 64))),
+            )
+        else:
+            self.halting_controller = AdaptiveHaltingController(
+                d_state=d_model,
+                init_halt_prob=halting_config.get("init_halt_prob", 0.05),
+            )
 
     def set_warmup_active(self, active):
         self._warmup_active = bool(active) and self.warmup_terminal_step is not None
@@ -182,6 +204,25 @@ class RelationalGCNHaltingClassifier(nn.Module):
         update_norms = []
         state_norms = []
         stability_losses = []
+        # Step-aware claim selector scores per step (B, max_nodes). Lets
+        # compute_loss latent_claim_selector path consume this RGCN ACT
+        # baseline uniformly with MBSModel.
+        claim_scores_per_step = []
+
+        # Enriched halting plumbing — mirrors MBSModel._forward_adaptive_halting.
+        if self.enriched_halting:
+            node_mask_b = node_mask.bool()
+            is_claim = (cell_type_ids == CELL_TYPES["CLAIM"]) & node_mask_b
+            is_qc = batch["is_query_claim_node"].bool()
+            cvi = batch["claim_value_ids"].long()
+            agg_mask = is_claim & is_qc & (cvi >= 0)
+            prev_value_margin = h.new_zeros(batch_size)
+            T_max_for_norm = max(int(max_steps), 1)
+        else:
+            agg_mask = None
+            cvi = None
+            prev_value_margin = None
+            T_max_for_norm = None
 
         for step_idx in range(int(max_steps)):
             step_number = step_idx + 1
@@ -214,7 +255,18 @@ class RelationalGCNHaltingClassifier(nn.Module):
 
             query_state = h[seq_idx, query_node_idx]
             step_logits = self.answer_head(query_state)
-            halt_prob = self.halting_controller(h, query_node_idx, node_mask)
+            # Step-aware claim selector score on every node — used by the
+            # latent mode AND by the enriched halting controller's aux feats.
+            claim_scores_t = self.claim_selector_head(h).squeeze(-1)
+            if self.enriched_halting:
+                aux, prev_value_margin = compute_halt_aux_features(
+                    claim_scores_t, agg_mask, cvi, num_values,
+                    step_number, T_max_for_norm, prev_value_margin,
+                )
+                aux_in = aux.detach() if self.detach_aux_features_from_selector else aux
+                halt_prob = self.halting_controller(query_state, aux_in)
+            else:
+                halt_prob = self.halting_controller(h, query_node_idx, node_mask)
             if step_number < min_steps:
                 weight = torch.zeros_like(remaining_mass)
             elif step_number == int(max_steps):
@@ -226,6 +278,7 @@ class RelationalGCNHaltingClassifier(nn.Module):
             remaining_mass = (remaining_mass - weight).clamp_min(0.0)
             halt_probs.append(halt_prob)
             halt_weights.append(weight)
+            claim_scores_per_step.append(claim_scores_t)
 
         halt_probs_tensor = torch.stack(halt_probs, dim=1)
         halt_weights_tensor = torch.stack(halt_weights, dim=1)
@@ -251,6 +304,10 @@ class RelationalGCNHaltingClassifier(nn.Module):
             "halt_probs": halt_probs_tensor,
             "halt_weights": halt_weights_tensor,
             "expected_steps": expected_steps,
+            "claim_scores_per_step": claim_scores_per_step,
+            # Audit hook: final substrate state at step max_steps. Pure
+            # instrumentation, never read by the loss / training path.
+            "final_h": h,
         }
 
 

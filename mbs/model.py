@@ -2,7 +2,13 @@ import torch
 from torch import nn
 
 from .graph import CELL_TYPES
-from .halting import AdaptiveHaltingController
+from .halting import (
+    AdaptiveHaltingController,
+    EnrichedAdaptiveHaltingController,
+    ENRICHED_HALT_AUX_DIM,
+    compute_halt_aux_features,
+    _aggregate_value_logits,
+)
 from .substrate import MorphogeneticBeliefSubstrate
 
 
@@ -27,6 +33,17 @@ class MBSModel(nn.Module):
         self.adaptive_halting = adaptive_halting
         halting_config = halting_config or {}
         self.halting_min_steps = int(halting_config.get("min_message_steps", 4))
+        self.halting_max_steps = int(halting_config.get("max_message_steps", message_steps))
+        self.enriched_halting = bool(halting_config.get("enriched", False))
+        # When True (default), the aux features fed to the enriched halting
+        # controller are detached before entering it: the halting loss CANNOT
+        # back-propagate into the claim_selector_head through the aux features
+        # (it still flows via the step-aware answer CE on claim_selector_head).
+        # See Task B / CODE_AUDIT_FINAL_REPORT — closes a subtle gradient leak
+        # that may have driven H6/H7/H8 co-adaptation drift.
+        self.detach_aux_features_from_selector = bool(
+            halting_config.get("detach_aux_features_from_selector", True)
+        )
         self.token_embedding = nn.Embedding(vocab_size, d_state, padding_idx=0)
         self.node_type_embedding = nn.Embedding(num_cell_types, d_state)
         self.input_norm = nn.LayerNorm(d_state)
@@ -42,11 +59,25 @@ class MBSModel(nn.Module):
         self.answer_head = nn.Sequential(nn.LayerNorm(d_state), nn.Linear(d_state, num_values))
         self.conflict_head = nn.Linear(d_state, 1)
         self.repair_head = nn.Linear(d_state, num_values)
+        # Dedicated head for the latent claim selector. Used by step-aware
+        # latent_claim_selector mode (compute_loss reads
+        # outputs["claim_scores_per_step"]). The legacy single-step path in
+        # compute_loss falls back to repair_head channel 0 when this head's
+        # outputs are not available — preserves backward compatibility for
+        # checkpoints saved before this head existed.
+        self.claim_selector_head = nn.Linear(d_state, 1)
         if adaptive_halting:
-            self.halting_controller = AdaptiveHaltingController(
-                d_state=d_state,
-                init_halt_prob=halting_config.get("init_halt_prob", 0.05),
-            )
+            if self.enriched_halting:
+                self.halting_controller = EnrichedAdaptiveHaltingController(
+                    d_state=d_state,
+                    init_halt_prob=halting_config.get("init_halt_prob", 0.05),
+                    hidden=tuple(halting_config.get("enriched_hidden", (128, 64))),
+                )
+            else:
+                self.halting_controller = AdaptiveHaltingController(
+                    d_state=d_state,
+                    init_halt_prob=halting_config.get("init_halt_prob", 0.05),
+                )
         else:
             self.halting_controller = None
 
@@ -96,7 +127,27 @@ class MBSModel(nn.Module):
         halt_probs = []
         halt_weights = []
         step_diagnostics = []
+        # Step-aware claim selector scores (B, max_nodes) per step. Consumed
+        # by compute_loss in latent_claim_selector mode to enable adaptive
+        # halting on the latent answer (Σ_t halt_w_t · CE_t).
+        claim_scores_per_step = []
         mode_logits = None
+
+        # Aux feature plumbing (only used when enriched_halting=True; we
+        # compute the agg_mask once since it is constant per batch).
+        if self.enriched_halting:
+            node_mask_b = batch["node_mask"].bool()
+            is_claim = (cell_type_ids == CELL_TYPES["CLAIM"]) & node_mask_b
+            is_qc = batch["is_query_claim_node"].bool()
+            cvi = batch["claim_value_ids"].long()
+            agg_mask = is_claim & is_qc & (cvi >= 0)
+            prev_value_margin = h.new_zeros(batch_size)
+            T_max_for_norm = max(int(max_steps), 1)
+        else:
+            agg_mask = None
+            cvi = None
+            prev_value_margin = None
+            T_max_for_norm = None
 
         for step_idx in range(int(max_steps)):
             step_number = step_idx + 1
@@ -113,7 +164,22 @@ class MBSModel(nn.Module):
             step_diagnostics.append(diagnostics)
             query_state = h[batch_idx, query_node_idx]
             step_logits = self.answer_head(query_state)
-            halt_prob = self.halting_controller(h, query_node_idx, batch["node_mask"])
+            # Step-aware claim selector score on every node — used by latent mode
+            # AND by the enriched halting controller's aux features.
+            claim_scores_t = self.claim_selector_head(h).squeeze(-1)
+            if self.enriched_halting:
+                aux, prev_value_margin = compute_halt_aux_features(
+                    claim_scores_t, agg_mask, cvi, num_values,
+                    step_number, T_max_for_norm, prev_value_margin,
+                )
+                # Optionally detach aux features so the halting loss CANNOT
+                # back-propagate into claim_selector_head via the aux signal.
+                # Default (True) blocks the leak that may have driven H6/H7/H8
+                # co-adaptation drift; False = legacy behavior (for ablations).
+                aux_in = aux.detach() if self.detach_aux_features_from_selector else aux
+                halt_prob = self.halting_controller(query_state, aux_in)
+            else:
+                halt_prob = self.halting_controller(h, query_node_idx, batch["node_mask"])
             if step_number < min_steps:
                 weight = torch.zeros_like(remaining_mass)
             elif step_number == int(max_steps):
@@ -125,6 +191,7 @@ class MBSModel(nn.Module):
             remaining_mass = (remaining_mass - weight).clamp_min(0.0)
             halt_probs.append(halt_prob)
             halt_weights.append(weight)
+            claim_scores_per_step.append(claim_scores_t)
 
         halt_probs_tensor = torch.stack(halt_probs, dim=1)
         halt_weights_tensor = torch.stack(halt_weights, dim=1)
@@ -150,6 +217,10 @@ class MBSModel(nn.Module):
             "halt_probs": halt_probs_tensor,
             "halt_weights": halt_weights_tensor,
             "expected_steps": expected_steps,
+            "claim_scores_per_step": claim_scores_per_step,
+            # Audit hook: final substrate state at step max_steps. Pure
+            # instrumentation, never read by the loss / training path.
+            "final_h": h,
         }
 
 
