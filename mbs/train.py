@@ -33,6 +33,12 @@ RGCN_VARIANTS = {
     # controller_only=true / trainable_modules at the YAML level, mirroring
     # the MBS H6_detached_aux configs.
     "rgcn_h6_two_stage",
+    # H7 — same enriched RGCN backbone as rgcn_h6_two_stage, with the
+    # ordinal-calibration loss + validation-only checkpoint gate
+    # activated via config keys `halting_ordinal:` and `checkpoint_gate:`.
+    # All model code is identical to rgcn_h6_two_stage ; the new
+    # behaviour lives entirely in mbs/train.py + mbs/ordinal_halting.py.
+    "rgcn_h7_two_stage",
 }
 GRAPH_VARIANTS = MBS_VARIANTS | RGCN_VARIANTS
 ALL_VARIANTS = GRAPH_VARIANTS
@@ -40,7 +46,7 @@ ALL_VARIANTS = GRAPH_VARIANTS
 
 def build_model(variant, config, tokenizer):
     if variant in RGCN_VARIANTS:
-        if variant in {"rgcn_repair_stability_act", "rgcn_repair_stability_act_forced_t8", "rgcn_repair_stability_act_warmup_t8", "rgcn_h6_two_stage"}:
+        if variant in {"rgcn_repair_stability_act", "rgcn_repair_stability_act_forced_t8", "rgcn_repair_stability_act_warmup_t8", "rgcn_h6_two_stage", "rgcn_h7_two_stage"}:
             halting = config.get("halting", {}) or {}
             force_terminal_step = 8 if variant == "rgcn_repair_stability_act_forced_t8" else None
             warmup_terminal_step = 8 if variant == "rgcn_repair_stability_act_warmup_t8" else None
@@ -88,13 +94,34 @@ def build_model(variant, config, tokenizer):
 def make_loaders(config, tokenizer):
     datasets = build_belief_repair_datasets(config, tokenizer)
     batch_size = int(config.get("batch_size", 16))
+    # H7 — when ordinal loss or checkpoint gate is enabled, wrap the
+    # collate so each batch carries `required_hops` derived from the
+    # sample's metadata. Config-gated ; H6 configs produce a byte-
+    # identical batch dict to before this patch.
+    ord_enabled = bool((config.get("halting_ordinal") or {}).get("enabled", False))
+    gate_enabled = bool((config.get("checkpoint_gate") or {}).get("enabled", False))
+    needs_required_hops = ord_enabled or gate_enabled
+    if needs_required_hops:
+        from .ordinal_halting import derive_required_hops_v1_from_metadata
+
+        def _collate(samples):
+            batch = collate_graph_samples(samples, tokenizer)
+            hops = []
+            for s in samples:
+                h = derive_required_hops_v1_from_metadata(s.get("metadata"))
+                hops.append(int(h) if h is not None else -1)
+            batch["required_hops"] = torch.tensor(hops, dtype=torch.long)
+            return batch
+        collate_fn = _collate
+    else:
+        collate_fn = lambda samples: collate_graph_samples(samples, tokenizer)
     loaders = {}
     for split, dataset in datasets.items():
         loaders[split] = DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=(split == "train"),
-            collate_fn=lambda samples: collate_graph_samples(samples, tokenizer),
+            collate_fn=collate_fn,
         )
     return loaders
 
@@ -570,7 +597,7 @@ def compute_loss(outputs, batch, config, variant):
     if uses_stability_loss(variant, config) and "stability_loss" in diagnostics:
         loss = loss + config.get("lambda_stability", 0.01) * diagnostics["stability_loss"]
 
-    if variant in {"mbs_adaptive_halting", "rgcn_repair_stability_act", "rgcn_repair_stability_act_warmup_t8", "rgcn_h6_two_stage"} and "expected_steps_mean" in diagnostics:
+    if variant in {"mbs_adaptive_halting", "rgcn_repair_stability_act", "rgcn_repair_stability_act_warmup_t8", "rgcn_h6_two_stage", "rgcn_h7_two_stage"} and "expected_steps_mean" in diagnostics:
         ponder_signal = diagnostics.get("ponder_active_signal")
         ponder_active = True if ponder_signal is None else float(ponder_signal.item() if torch.is_tensor(ponder_signal) else ponder_signal) >= 0.5
         if ponder_active:
@@ -581,6 +608,43 @@ def compute_loss(outputs, batch, config, variant):
 
     if "mode_entropy" in diagnostics:
         loss = loss - config.get("lambda_mode_entropy", 0.001) * diagnostics["mode_entropy"]
+
+    # H7 — ordinal calibration loss (config-gated, off by default for H6).
+    # Triggers only when `halting_ordinal.enabled` is True. The training
+    # batch must carry `required_hops` ; this is guaranteed by the
+    # ordinal-aware collate wrapper in `make_loaders` when the gate is
+    # active. If somehow missing, we raise a clear error rather than
+    # silently skipping the loss (design constraint §3 of the H7 prompt).
+    ord_cfg = (config.get("halting_ordinal") or {})
+    if ord_cfg.get("enabled", False) and "expected_steps" in outputs:
+        if "required_hops" not in batch:
+            raise RuntimeError(
+                "halting_ordinal.enabled=True but the batch dict has no "
+                "'required_hops' key. The ordinal-aware collate must be "
+                "active. Either disable halting_ordinal or ensure "
+                "make_loaders() received a config with halting_ordinal "
+                "or checkpoint_gate enabled."
+            )
+        from .ordinal_halting import ordinal_pairwise_loss as _ord_loss
+        loss_o, per_b_pairs, per_b_loss = _ord_loss(
+            outputs["expected_steps"], batch["required_hops"],
+            margin=float(ord_cfg.get("margin", 0.15)),
+            pair_sampling=str(ord_cfg.get("pair_sampling", "adjacent_balanced")),
+            max_pairs_per_batch=int(ord_cfg.get("max_pairs_per_batch", 512)),
+            stop_gradient_expected_step=bool(
+                ord_cfg.get("stop_gradient_expected_step", False)
+            ),
+        )
+        w = float(ord_cfg.get("loss_weight", 0.0))
+        if w > 0 and loss_o.requires_grad:
+            loss = loss + w * loss_o
+        parts["ordinal_loss"] = loss_o.detach()
+        parts["ordinal_loss_weighted"] = (w * loss_o).detach() if w > 0 else loss_o.new_zeros(())
+        parts["ordinal_pairs_total"] = float(sum(per_b_pairs.values()))
+        for k, v in per_b_pairs.items():
+            parts[f"ordinal_pairs_{k}"] = float(v)
+        for k, v in per_b_loss.items():
+            parts[f"ordinal_loss_{k}"] = float(v)
 
     return loss, parts
 
@@ -1028,6 +1092,39 @@ def train_one(config, variant, output_dir, checkpoint_dir):
         if device.type == "cuda":
             row["gpu_mem_allocated_mb"] = torch.cuda.memory_allocated(device) / (1024 * 1024)
             row["gpu_mem_reserved_mb"] = torch.cuda.memory_reserved(device) / (1024 * 1024)
+        # H7 — compute val-only ordinal gate metrics per epoch
+        # (config-gated, off by default for H6).
+        gate_cfg = (config.get("checkpoint_gate") or {})
+        if gate_cfg.get("enabled", False):
+            from .ordinal_halting import compute_gate_metrics, gate_eligible
+            gm = _collect_val_ordinal_per_sample(model, loaders["val"], device,
+                                                 variant, config)
+            gate_metrics = compute_gate_metrics(
+                gm["expected_steps"], gm["chosen_steps"], gm["required_hops"],
+                floor_mass_mean=gm["floor_mass_mean"],
+                final_mass_mean=gm["final_mass_mean"],
+            )
+            best_val_so_far = max(
+                (float(h["val_acc"]) for h in history),
+                default=float(row["val_acc"]),
+            )
+            eligible, reasons = gate_eligible(
+                gate_metrics, gate_cfg,
+                best_val_acc_so_far=best_val_so_far,
+                val_acc=float(row["val_acc"]),
+            )
+            row["gate_eligible"] = bool(eligible)
+            row["gate_reasons"] = "|".join(reasons) if reasons else ""
+            row["val_S_easy"] = gate_metrics.get("S_easy")
+            row["val_MACRO_AUC"] = gate_metrics.get("MACRO_AUC")
+            row["val_bucket_spread"] = gate_metrics.get("bucket_spread")
+            row["val_adjacent_margin_mean"] = gate_metrics.get("adjacent_margin_mean")
+            row["val_adjacent_margin_min"] = gate_metrics.get("adjacent_margin_min")
+            row["val_chosen_entropy_bits"] = gate_metrics.get("chosen_step_entropy_bits")
+            row["val_dominant_chosen_mass"] = gate_metrics.get("dominant_chosen_step_mass")
+            row["val_collapse_flags"] = "|".join(gate_metrics.get("flags", []))
+            # Per-epoch eligibility journal under the output_dir.
+            _append_gate_journal(output_dir, variant, epoch, row, gate_metrics)
         history.append(row)
         write_epoch_metrics_csv(epoch_metrics_csv, row, write_header=not csv_header_written)
         csv_header_written = True
@@ -1110,6 +1207,33 @@ def train_one(config, variant, output_dir, checkpoint_dir):
         }
         for warning in metadata["warnings"]:
             print(warning)
+        # H7 — record whether ANY epoch was gate-eligible. If none was,
+        # the selected best.pt is the fallback highest-val_acc ckpt and
+        # the run is marked `no_eligible_checkpoint=True`. Thresholds
+        # are NOT relaxed silently.
+        gate_cfg = (config.get("checkpoint_gate") or {})
+        if gate_cfg.get("enabled", False):
+            any_eligible = any(bool(h.get("gate_eligible", False)) for h in history)
+            metadata["checkpoint_gate"] = {
+                "enabled": True,
+                "any_epoch_eligible": bool(any_eligible),
+                "no_eligible_checkpoint": (not any_eligible),
+                "selected_epoch_eligible": bool(
+                    (selected_row or {}).get("gate_eligible", False)
+                ),
+                "selected_epoch_gate_reasons": (selected_row or {}).get(
+                    "gate_reasons", ""
+                ),
+                "thresholds": {
+                    "min_acc_within_best": float(gate_cfg.get("min_acc_within_best", 0.02)),
+                    "min_s_easy": float(gate_cfg.get("min_s_easy", 0.15)),
+                    "min_macro_auc": float(gate_cfg.get("min_macro_auc", 0.70)),
+                    "min_adjacent_margin_mean": float(gate_cfg.get("min_adjacent_margin_mean", 0.0)),
+                    "min_adjacent_margin_min": float(gate_cfg.get("min_adjacent_margin_min", -0.10)),
+                    "reject_hard_collapse": bool(gate_cfg.get("reject_hard_collapse", True)),
+                    "reject_soft_middle_step": bool(gate_cfg.get("reject_soft_middle_step", True)),
+                },
+            }
         save_json(
             os.path.join(output_dir, f"{variant}_train_results.json"),
             {
@@ -1147,6 +1271,22 @@ def flatten_metric(key, value):
 def checkpoint_row_is_better(candidate, selected, eps=1e-12):
     if selected is None:
         return True
+    # H7 — when the checkpoint gate is active (signalled by the
+    # presence of `gate_eligible` in the row, which only the H7 patch
+    # populates), prefer gate-eligible candidates over ineligible
+    # ones. Within the same eligibility class, fall back to the
+    # legacy val_acc / val_loss tie-break. H6 rows lack
+    # `gate_eligible` so the legacy behaviour is preserved.
+    cand_has_gate = "gate_eligible" in candidate
+    sel_has_gate = "gate_eligible" in selected
+    if cand_has_gate and sel_has_gate:
+        cand_elig = bool(candidate["gate_eligible"])
+        sel_elig = bool(selected["gate_eligible"])
+        if cand_elig and not sel_elig:
+            return True
+        if sel_elig and not cand_elig:
+            return False
+        # both eligible OR both ineligible : fall through to legacy.
     candidate_val = float(candidate["val_acc"])
     selected_val = float(selected["val_acc"])
     if candidate_val > selected_val + eps:
@@ -1157,6 +1297,106 @@ def checkpoint_row_is_better(candidate, selected, eps=1e-12):
         if candidate_loss < selected_loss - eps:
             return True
     return False
+
+
+# H7 helpers — appended at the bottom for read-order locality.
+
+@torch.no_grad()
+def _collect_val_ordinal_per_sample(model, val_loader, device, variant, config):
+    """Run the model on the val loader and collect per-sample expected_step,
+    chosen_step, required_hops AND batch-mean floor / final masses.
+
+    Called once per epoch from train_one when checkpoint_gate.enabled.
+    Returns a dict with the four list keys + the two scalar keys.
+
+    Stages 1/2 honor `force_terminal_step` / `warmup_terminal_step`
+    via the existing model.set_warmup_active mechanism ; we do not
+    pass an explicit `message_steps` argument here (the model picks
+    the correct schedule based on the current `_warmup_active` flag,
+    which is set by the outer training loop).
+    """
+    halting_cfg = (config.get("halting") or {})
+    min_steps = int(halting_cfg.get("min_message_steps", 4))
+    max_steps = int(halting_cfg.get("max_message_steps", 16))
+    model.eval()
+    expected_steps_all: list[float] = []
+    chosen_steps_all: list[float] = []
+    required_hops_all: list[int] = []
+    floor_mass_sum = 0.0
+    final_mass_sum = 0.0
+    n_total = 0
+    for batch in val_loader:
+        batch = move_batch(batch, device)
+        out = model(batch)
+        hops = batch.get("required_hops")
+        if hops is None:
+            # Caller is supposed to enable the ordinal-aware collate ;
+            # if this branch fires it is a programming error upstream.
+            raise RuntimeError(
+                "_collect_val_ordinal_per_sample : batch has no "
+                "'required_hops'. Ordinal-aware collate must be active."
+            )
+        E = out["expected_steps"].detach().cpu().float()
+        hw = out["halt_weights"].detach().cpu().float()
+        # chosen_step = argmax_t halt_weights[:, t] (1-indexed step).
+        chosen = (hw.argmax(dim=1).float() + 1.0)
+        expected_steps_all.extend(E.tolist())
+        chosen_steps_all.extend(chosen.tolist())
+        required_hops_all.extend(hops.detach().cpu().tolist())
+        # Floor mass at step min_steps (index min_steps - 1) ; final
+        # mass at step max_steps (index -1).
+        T = hw.size(1)
+        floor_idx = max(min(min_steps - 1, T - 1), 0)
+        floor_mass_sum += float(hw[:, floor_idx].sum().item())
+        final_mass_sum += float(hw[:, -1].sum().item())
+        n_total += hw.size(0)
+    return {
+        "expected_steps": expected_steps_all,
+        "chosen_steps": chosen_steps_all,
+        "required_hops": required_hops_all,
+        "floor_mass_mean": floor_mass_sum / max(n_total, 1),
+        "final_mass_mean": final_mass_sum / max(n_total, 1),
+    }
+
+
+def _append_gate_journal(output_dir, variant, epoch, row, gate_metrics):
+    """Append one epoch's gate metrics + eligibility to a JSON journal."""
+    import json
+    path = os.path.join(output_dir, f"{variant}_gate_eligibility.json")
+    if os.path.exists(path):
+        try:
+            data = json.loads(open(path).read())
+        except json.JSONDecodeError:
+            data = {"variant": variant, "epochs": []}
+    else:
+        data = {"variant": variant, "epochs": []}
+    # bucket_means is a dict[int, float] — JSON keys must be str.
+    bm = gate_metrics.get("bucket_means") or {}
+    bm_serialised = {str(k): float(v) for k, v in bm.items()}
+    data["epochs"].append({
+        "epoch": int(epoch),
+        "val_acc": float(row.get("val_acc", float("nan"))),
+        "ood_mixed_acc_diagnostic_only":
+            float(row.get("ood_mixed_acc", float("nan"))),
+        "gate_eligible": bool(row.get("gate_eligible", False)),
+        "gate_reasons": row.get("gate_reasons", ""),
+        "S_all": gate_metrics.get("S_all"),
+        "S_easy": gate_metrics.get("S_easy"),
+        "AUC9": gate_metrics.get("AUC9"),
+        "MACRO_AUC": gate_metrics.get("MACRO_AUC"),
+        "bucket_spread": gate_metrics.get("bucket_spread"),
+        "adjacent_margin_mean": gate_metrics.get("adjacent_margin_mean"),
+        "adjacent_margin_min": gate_metrics.get("adjacent_margin_min"),
+        "chosen_step_entropy_bits": gate_metrics.get("chosen_step_entropy_bits"),
+        "dominant_chosen_step_mass": gate_metrics.get("dominant_chosen_step_mass"),
+        "floor_mass_mean": gate_metrics.get("floor_mass_mean"),
+        "final_mass_mean": gate_metrics.get("final_mass_mean"),
+        "bucket_means": bm_serialised,
+        "flags": gate_metrics.get("flags", []),
+        "notes": gate_metrics.get("notes", []),
+    })
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, default=str)
 
 
 def build_training_metadata(history, selected_row, selected_checkpoint_path, variant):
