@@ -1,0 +1,20 @@
+{
+  "per_seed_split": [
+    {
+      "seed": 3,
+      "split": "val",
+      "mixture_logits_acc": 0.85546875,
+      "floor_mass_mean": 5.22537968295634e-19,
+      "final_mass_mean": 0.0,
+      "n": 512
+    },
+    {
+      "seed": 3,
+      "split": "ood_mixed",
+      "mixture_logits_acc": 0.8828125,
+      "floor_mass_mean": 4.093597221336637e-19,
+      "final_mass_mean": 0.0,
+      "n": 512
+    }
+  ]
+}
